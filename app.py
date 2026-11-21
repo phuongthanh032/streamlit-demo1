@@ -94,4 +94,84 @@ if submit_manual:
     metrics = [
         (input_hr, "ecg_hr_calc", r_col1),
         (input_sdnn, "ecg_sdnn_ms", r_col2),
-        (input_rmssd, "ecg_rmssd
+        (input_rmssd, "ecg_rmssd_ms", r_col3),
+        (input_lfhf, "ecg_lf_hf_ratio", r_col4)
+    ]
+    
+    # Lưu trữ trạng thái (low, normal, high) để đưa vào hàm lời khuyên
+    patient_conditions = {}
+    stress_markers = 0 
+    
+    for val, key, col in metrics:
+        std = STANDARDS[key]
+        status, condition = evaluate_metric(val, std["min"], std["max"])
+        
+        # Ghi nhận trạng thái
+        patient_conditions[key] = condition
+        
+        # Hiển thị số liệu
+        col.metric(label=std["name"], value=f"{val} {std['unit']}")
+        
+        if condition == "normal":
+            col.success(status)
+        else:
+            col.error(status)
+            if key in ["ecg_sdnn_ms", "ecg_rmssd_ms"] and condition == "low":
+                stress_markers += 1
+            if key == "ecg_lf_hf_ratio" and condition == "high":
+                stress_markers += 1
+
+    st.markdown("---")
+    
+    # IN RA LỜI KHUYÊN TỪ BÁC SĨ
+    st.subheader("👨‍⚕️ Lời khuyên & Chỉ định từ Chuyên gia")
+    
+    # Kết luận tổng thể
+    if stress_markers >= 2:
+        st.error("🚨 **KẾT LUẬN TỔNG QUAN:** Cơ thể đang ở trạng thái báo động do mất cân bằng thần kinh tự chủ, suy kiệt thể lực hoặc căng thẳng tột độ.")
+    else:
+        st.success("✅ **KẾT LUẬN TỔNG QUAN:** Hệ thần kinh tự chủ hoạt động cơ bản ổn định.")
+
+    # In chi tiết từng lời khuyên
+    advices = generate_doctor_advice(patient_conditions)
+    for advice in advices:
+        st.info(advice)
+
+st.markdown("---")
+
+# ==========================================
+# PHẦN 3: XỬ LÝ HÀNG LOẠT TỪ FILE CSV
+# ==========================================
+st.header("2. Phân tích & Xử lý nhiễu hàng loạt từ file dữ liệu")
+uploaded_file = st.file_uploader("Tải lên tệp CSV chứa dữ liệu của bạn", type=["csv"])
+
+if uploaded_file is not None:
+    df_raw = pd.read_csv(uploaded_file)
+    
+    with st.spinner('Hệ thống đang tự động tiền xử lý (Điền khuyết, Lọc nhiễu Z-score)...'):
+        df_clean = df_raw.copy()
+        numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
+        df_clean[numeric_cols] = df_clean[numeric_cols].apply(lambda x: x.fillna(x.median()))
+        z_scores = np.abs(stats.zscore(df_clean[numeric_cols]))
+        df_clean = df_clean[(z_scores < 3).all(axis=1)]
+        
+    st.success(f"Đã xử lý xong! Dữ liệu làm sạch giữ lại {len(df_clean)}/{len(df_raw)} mẫu.")
+    
+    st.subheader("📊 Biểu đồ phân bố so với Chuẩn Y khoa")
+    cols_to_analyze = [col for col in STANDARDS.keys() if col in df_clean.columns]
+    
+    if not cols_to_analyze:
+        st.error("File CSV của bạn không chứa các cột chuẩn.")
+    else:
+        for col in cols_to_analyze:
+            std = STANDARDS[col]
+            mean_val = df_clean[col].mean()
+            
+            st.markdown(f"#### {std['name']} (Trung bình toàn nhóm: {mean_val:.2f})")
+            fig, ax = plt.subplots(figsize=(10, 4))
+            sns.histplot(df_clean[col], kde=True, ax=ax, color="cornflowerblue")
+            ax.axvline(std["min"], color='red', linestyle='--', linewidth=2, label=f'Ngưỡng dưới ({std["min"]})')
+            if std["max"] != 999:
+                ax.axvline(std["max"], color='orange', linestyle='--', linewidth=2, label=f'Ngưỡng trên ({std["max"]})')
+            ax.legend()
+            st.pyplot(fig)
